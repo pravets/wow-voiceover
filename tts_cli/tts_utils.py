@@ -19,6 +19,112 @@ DATAMODULE_TABLE_GUARD_CLAUSE = 'if not VoiceOver or not VoiceOver.DataModules t
 REPLACE_DICT = {'$b': '\n', '$B': '\n', '$n': 'adventurer', '$N': 'Adventurer',
                 '$C': 'Adventurer', '$c': 'adventurer', '$R': 'Traveler', '$r': 'traveler'}
 
+# The Russian client wraps class/race placeholders in |3-6(...) / |1-3(...), e.g. |3-6($c).
+GENDER_MARKUP_RE = re.compile(r'\|[0-9]+-\d+[()]([^)]*)\)?')
+# |4(singular:few:many); picks the plural form for a number before it.
+PLURAL_MARKUP_RE = re.compile(r'\|4\(([^)]*)\);?')
+PLAYER_PLACEHOLDER_RE = re.compile(r'\$[NnCcRr]')
+# $g male:female; (the Russian client adds a case marker after the female form);
+# a few localized strings end the form with a comma instead of ';'
+GENDER_OPTION_SEMI_RE = re.compile(r'\$[Gg]\s*([^:;]+?)\s*:\s*([^;]+?)\s*;')
+GENDER_OPTION_COMMA_RE = re.compile(r'\$[Gg]\s*([^:;,.!?]+?)\s*:\s*([^:;,.!?]+?)\s*,')
+CYRILLIC_RE = re.compile(r'[\u0400-\u04FF]')
+
+# player-name/class/race placeholders, capitalized and lowercase forms
+PLAYER_FORMS = {
+    'ru': {'m': ('Путник', 'путник'), 'f': ('Путница', 'путница')},
+    'en': {'m': ('Adventurer', 'adventurer'), 'f': ('Adventurer', 'adventurer')},
+}
+RACE_FORMS_EN = ('Traveler', 'traveler')
+
+# Masculine predicate forms that must agree with a female player in the
+# f-variants of Russian texts (the DB keeps one shared text). Word-boundary,
+# case-preserving; extend as more mismatches surface.
+FEMALE_FORMS = {
+    'готов': 'готова',
+}
+
+
+def apply_female_agreement(text):
+    def repl(m):
+        word = m.group(0)
+        female = FEMALE_FORMS[word.lower()]
+        return female.capitalize() if word[0].isupper() else female
+    pattern = re.compile(r'\b(' + '|'.join(FEMALE_FORMS) + r')\b',
+                         re.IGNORECASE | re.UNICODE)
+    return pattern.sub(repl, text)
+
+
+def is_russian_text(text):
+    return bool(CYRILLIC_RE.search(text))
+
+
+def strip_gender_markup(text):
+    return GENDER_MARKUP_RE.sub(lambda m: m.group(1), text)
+
+
+def _starts_sentence(prefix):
+    return not prefix.strip() or bool(re.search(r'[.!?…»"\')\]]\s*$', prefix))
+
+
+def replace_player_placeholders(text, language, gender):
+    def repl(m):
+        token = m.group(0)
+        if language == 'ru':
+            cap, low = PLAYER_FORMS['ru'][gender]
+        elif token.lower() == '$r':
+            cap, low = RACE_FORMS_EN
+        else:
+            cap, low = PLAYER_FORMS['en'][gender]
+        return cap if _starts_sentence(text[:m.start()]) else low
+    return PLAYER_PLACEHOLDER_RE.sub(repl, text)
+
+
+def apply_gender_option(text, gender):
+    idx = 1 if gender == 'm' else 2
+
+    def repl_semi(m):
+        form = m.group(idx).strip()
+        return re.sub(r'\s*:[^:]*$', '', form)  # drop the case marker
+
+    def repl_comma(m):
+        return m.group(idx) + ','
+
+    text = GENDER_OPTION_SEMI_RE.sub(repl_semi, text)
+    return GENDER_OPTION_COMMA_RE.sub(repl_comma, text)
+
+
+def apply_plural_markup(text):
+    def repl(m):
+        forms = [f.strip() for f in m.group(1).split(':')]
+        if not forms:
+            return ''
+        number = re.search(r'(\d+)\s*$', text[:m.start()])
+        if number and len(forms) >= 3:
+            n = int(number.group(1))
+            if n % 10 == 1 and n % 100 != 11:
+                idx = 0
+            elif 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14:
+                idx = 1
+            else:
+                idx = 2
+            return forms[idx]
+        return forms[0]
+    return PLURAL_MARKUP_RE.sub(repl, text)
+
+
+def build_cleaned_text(raw, language, gender):
+    text = strip_gender_markup(raw)
+    text = apply_plural_markup(text)
+    text = text.replace('$b', '\n').replace('$B', '\n')
+    text = re.sub(r'<.*?>\s', '', text)
+    text = replace_player_placeholders(text, language, gender or 'm')
+    if gender is not None:
+        text = apply_gender_option(text, gender)
+    if gender == 'f' and language == 'ru':
+        text = apply_female_agreement(text)
+    return text
+
 def get_hash(text):
     hash_object = hashlib.md5(text.encode())
     return hash_object.hexdigest()
@@ -78,7 +184,11 @@ class TTSProcessor:
             print("Error: unable to fetch data.")
             return {}
 
-        response = response.json()
+        try:
+            response = response.json()
+        except ValueError:
+            print("Error: unable to fetch data.")
+            return {}
         voice_map = {}
 
         for voice in response["voices"]:
@@ -141,30 +251,28 @@ class TTSProcessor:
         df['templateText_race_gender'] = df['original_text'] + df['race'] + df['gender']
         df['templateText_race_gender_hash'] = df['templateText_race_gender'].apply(get_hash)
 
-        df['cleanedText'] = df['text'].copy()
-
-        for k, v in REPLACE_DICT.items():
-            df['cleanedText'] = df['cleanedText'].str.replace(k, v, regex=False)
-
-        df['cleanedText'] = df['cleanedText'].str.replace(r'<.*?>\s', '', regex=True)
-
-        df['player_gender'] = None
         rows = []
         for _, row in df.iterrows():
-            if re.search(r'\$[Gg]', row['cleanedText']):
-                male_text, female_text = self.handle_gender_options(row['cleanedText'])
+            raw = str(row['text'])
+            stripped = strip_gender_markup(raw)
+            language = 'ru' if is_russian_text(stripped) else 'en'
+            has_gender_option = bool(GENDER_OPTION_SEMI_RE.search(stripped)
+                                     or GENDER_OPTION_COMMA_RE.search(stripped))
+            has_player_placeholder = bool(PLAYER_PLACEHOLDER_RE.search(stripped))
 
-                row_male = row.copy()
-                row_male['cleanedText'] = male_text
-                row_male['player_gender'] = 'm'
-
-                row_female = row.copy()
-                row_female['cleanedText'] = female_text
-                row_female['player_gender'] = 'f'
-
-                rows.extend([row_male, row_female])
+            # Russian player placeholders need a male and a female take, like $G does:
+            # the addon picks the m-/f- file by the player's gender.
+            if has_gender_option or (language == 'ru' and has_player_placeholder):
+                for tag in ('m', 'f'):
+                    row_male = row.copy()
+                    row_male['cleanedText'] = build_cleaned_text(raw, language, tag)
+                    row_male['player_gender'] = tag
+                    rows.append(row_male)
             else:
-                rows.append(row)
+                row_copy = row.copy()
+                row_copy['cleanedText'] = build_cleaned_text(raw, language, None)
+                row_copy['player_gender'] = None
+                rows.append(row_copy)
 
         new_df = pd.DataFrame(rows)
         new_df.reset_index(drop=True, inplace=True)

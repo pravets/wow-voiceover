@@ -10,3 +10,8 @@ generated
 .DS_Store
 AI_VoiceOver/AI_VoiceOver.toc
 RELEASE
+.opencode
+backup
+samples
+voices
+assets

@@ -1,10 +1,9 @@
-version: '3.9'
 services:
   mysql:
-    image: mysql:8
+    image: mysql:8.4
     container_name: mysql-server
     environment:
-      MYSQL_ROOT_PASSWORD: wow
+      MYSQL_ROOT_PASSWORD: ${MYSQL_PASSWORD}
     volumes:
       - wowdb-data:/var/lib/mysql
     ports:

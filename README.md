@@ -29,18 +29,15 @@ python -m venv .venv
 ```bash
 pip install -r requirements.txt
 ```
-3. Copy the .env.example file to .env and fill in your ElevenLabs API Key and database credentials. The included database values are fine if you're going to use the docker-compose file.
+3. Copy the .env.example file to .env and fill in your ElevenLabs API Key and database credentials. `MYSQL_DATABASE` must point at your AzerothCore world database (e.g. `acore_world`); the project's own tables are stored in a separate database (`MYSQL_VOICEOVER_DATABASE`, `wow_voiceover` by default).
 ```bash
 cp .env.example .env
 ```
-4. Start the MySQL DB
-```bash
-docker compose up -d
-```
-5. Seed the MySQL DB
+4. Create the project database and import the client display tables used to detect each NPC's race and gender:
 ```bash
 python cli-main.py init-db
 ```
+Your world database is not modified: the display tables live in the separate `wow_voiceover` database.
 
 ## Voice Setup
 The generation scripts assume you have voices created in Elevenlabs named in the format `race-gender`. For the exact races the script checks your elevenlabs account for, refer to `tts_cli\consts.py`. Gender will always either be `male` or `female`. ex: `orc-male`. You will need to create your own voice clones. A good place to get samples is @ https://www.wowhead.com/sounds/npc-greetings/name:orc 

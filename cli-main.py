@@ -2,11 +2,10 @@ import argparse
 from prompt_toolkit.shortcuts import checkboxlist_dialog, radiolist_dialog, yes_no_dialog
 from tts_cli.sql_queries import query_dataframe_for_all_quests_and_gossip, query_dataframe_for_area
 from tts_cli.tts_utils import TTSProcessor
-from tts_cli.init_db import download_and_extract_latest_db_dump, import_sql_files_to_database
+from tts_cli.init_db import import_display_tables_to_database
 from tts_cli.consts import RACE_DICT_INV, GENDER_DICT_INV, race_gender_tuple_to_strings
 from tts_cli.wrath_model_extraction import write_model_data
 from tts_cli.zone_selector import KalimdorZoneSelector, EasternKingdomsZoneSelector
-from tts_cli import utils
 
 
 def prompt_user(tts_processor):
@@ -120,7 +119,8 @@ parser = argparse.ArgumentParser(
     description="Text-to-Speech CLI for WoW dialog")
 
 subparsers = parser.add_subparsers(dest="mode", help="Available modes")
-subparsers.add_parser("init-db", help="Initialize the database")
+subparsers.add_parser("init-db", help="Create the wow_voiceover database and import the display tables required for race/gender detection")
+subparsers.add_parser("init-display-tables", help="Import CreatureDisplayInfo tables required for race/gender detection (AzerothCore)")
 subparsers.add_parser("interactive", help="Interactive mode")
 subparsers.add_parser("extract_model_data", help="Generate info about which NPC entry uses which model.")
 subparsers.add_parser("gen_lookup_tables", help="Generate the lookup tables for all quests and gossip in the game. Also recomputes the sound length table.") \
@@ -135,20 +135,17 @@ def interactive_mode():
     tts_processor.tts_dataframe(df, selected_voice_names)
 
 
-if args.mode == "init-db":
-    download_and_extract_latest_db_dump()
-    import_sql_files_to_database()
-    print("Database initialized successfully.")
+if args.mode == "init-db" or args.mode == "init-display-tables":
+    import_display_tables_to_database()
 elif args.mode == "interactive":
     interactive_mode()
 elif args.mode == "gen_lookup_tables":
     tts_processor = TTSProcessor()
 
     language_code = args.lang
-    language_number = utils.language_code_to_language_number(language_code)
     print(f"Selected language: {language_code}")
 
-    df = query_dataframe_for_all_quests_and_gossip(language_number)
+    df = query_dataframe_for_all_quests_and_gossip(language_code)
     df = tts_processor.preprocess_dataframe(df)
     tts_processor.generate_lookup_tables(df)
 elif args.mode == "extract_model_data":

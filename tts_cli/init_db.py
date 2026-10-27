@@ -1,6 +1,7 @@
-from tts_cli.env_vars import MYSQL_HOST, MYSQL_PORT, MYSQL_PASSWORD, MYSQL_USER, MYSQL_DATABASE
+from tts_cli.env_vars import MYSQL_HOST, MYSQL_PORT, MYSQL_PASSWORD, MYSQL_USER, MYSQL_DATABASE, MYSQL_VOICEOVER_DATABASE
 import pymysql
 import io
+import re
 import zipfile
 import requests
 import os
@@ -116,8 +117,33 @@ def import_sql_files_to_database():
     db.close()
 
 
+def import_display_tables_to_database():
+    if not re.fullmatch(r'[A-Za-z0-9_]+', MYSQL_VOICEOVER_DATABASE):
+        raise ValueError(f"Invalid database name: {MYSQL_VOICEOVER_DATABASE!r}")
+
+    db = pymysql.connect(
+        host=MYSQL_HOST,
+        port=MYSQL_PORT,
+        user=MYSQL_USER,
+        password=MYSQL_PASSWORD
+    )
+    cursor = db.cursor()
+    cursor.execute(f"CREATE DATABASE IF NOT EXISTS `{MYSQL_VOICEOVER_DATABASE}`;")
+    cursor.execute(f"USE `{MYSQL_VOICEOVER_DATABASE}`;")
+
+    for file in EXPORTED_FILES:
+        print(f"Importing {file}")
+        with open(file, "r") as f:
+            sql_commands = f.read().split(';')
+        for command in sql_commands:
+            if command.strip():
+                cursor.execute(command)
+
+    db.commit()
+    cursor.close()
+    db.close()
+    print(f"Display tables imported successfully into `{MYSQL_VOICEOVER_DATABASE}`.")
+
+
 if __name__ == "__main__":
-    download_and_extract_latest_db_dump()
-    import_sql_files_to_database()
-    
-    print("Database initialized successfully.")
+    import_display_tables_to_database()

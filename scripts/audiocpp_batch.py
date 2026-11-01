@@ -100,14 +100,19 @@ def synth_one(session: requests.Session, url: str, model: str, item: dict,
         options['top_p'] = args.top_p
     if args.top_k is not None:
         options['top_k'] = args.top_k
+    if args.max_tokens is not None:
+        options['max_tokens'] = args.max_tokens
     if options:
         body['options'] = options
 
+    headers = {'Content-Type': 'application/json'}
+    if args.key:
+        headers['Authorization'] = 'Bearer ' + args.key
     last_err = None
     for attempt in range(1, args.retries + 1):
         try:
             r = session.post(url, json=body, timeout=args.timeout,
-                             headers={'Content-Type': 'application/json'})
+                             headers=headers)
             if r.status_code == 200 and r.headers.get('content-type') != 'application/json':
                 audio = r.content
                 duration = wav_duration(audio)
@@ -145,11 +150,14 @@ def main():
                     help='text file with what is said in the reference')
     ap.add_argument('--url', required=True,
                     help='audio.cpp server base URL')
+    ap.add_argument('--key', default=None, help='Bearer token if the server requires auth')
     ap.add_argument('--model', default='higgs-bf16')
     ap.add_argument('--seed', type=int, default=None)
     ap.add_argument('--temperature', type=float, default=None)
     ap.add_argument('--top-p', type=float, default=None)
     ap.add_argument('--top-k', type=int, default=None)
+    ap.add_argument('--max-tokens', type=int, default=None,
+                    help='raise server max_tokens for long text chunks')
     ap.add_argument('--offset', type=int, default=0,
                     help='first manifest line to consider')
     ap.add_argument('--limit', type=int, default=0)

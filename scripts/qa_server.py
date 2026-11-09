@@ -47,12 +47,12 @@ PAGE = """<!doctype html>
  .stt{color:#333}
 </style></head><body>
 <div class="bar">
- <label>Голос <select id="fv"><option value="">все</option></select></label>
+ <label>Голос <select id="fv"><option value="">все</option></select></label> <button type="button" id="fv-ref" title="образец голоса" disabled>🔊 образец</button>
  <label>NPC <select id="fn"><option value="">все</option></select></label>
  <label><input type="checkbox" id="funchecked"> только непроверенные</label>
  <label><input type="checkbox" id="fwork"> непроверенные и с замечаниями</label>
  <label><input type="checkbox" id="fall"> показывать без mp3</label>
- <label>Seed <input type="text" id="fseed" size="6" placeholder="по умолчанию"></label>
+ <label>Seed <input type="text" id="fseed" size="6" placeholder="по умолчанию"> <button type="button" id="fseed-rnd" title="случайный seed">🎲</button></label>
  <span class="cnt" id="cnt"></span>
  <button id="pprev">←</button> <span class="cnt" id="ppage"></span> <button id="pnext">→</button>
  <label><input type="checkbox" id="pall"> все</label>
@@ -170,11 +170,24 @@ async function regen(id){
   s.textContent = 'перегенерировано';
   render();
 }
-$('fv').onchange = $('fn').onchange = () => { refill(); render(); };
+$('fn').onchange = () => { refill(); render(); };
+$('fv').onchange = () => { refill(); render(); $('fv-ref').disabled = !$('fv').value; };
+let refAudio = null;
+$('fv-ref').onclick = () => {
+  const v = $('fv').value;
+  if (!v) return;
+  if (refAudio) { refAudio.pause(); refAudio = null; $('fv-ref').textContent = '🔊 образец'; return; }
+  refAudio = new Audio('/api/ref?voice=' + encodeURIComponent(v));
+  refAudio.onended = () => { refAudio = null; $('fv-ref').textContent = '🔊 образец'; };
+  refAudio.onerror = () => { refAudio = null; $('fv-ref').textContent = '🔊 образец'; alert('нет ref.wav для голоса ' + v); };
+  refAudio.play();
+  $('fv-ref').textContent = '⏹ стоп';
+};
 $('funchecked').onchange = $('fall').onchange = $('fwork').onchange = () => { refill(); render(); };
 $('pprev').onclick = () => { if (page > 0) { page--; render(); } };
 $('pnext').onclick = () => { page++; render(); };
 $('pall').onchange = () => { page = 0; render(); };
+$('fseed-rnd').onclick = () => { $('fseed').value = Math.floor(Math.random() * 1e9); };
 document.addEventListener('change', e => {
   if (e.target.tagName !== 'TEXTAREA') return;
   const d = DATA.find(x => 'rec-' + x.id === e.target.id || 'txt-' + x.id === e.target.id);
@@ -213,6 +226,18 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(page)
         elif u.path == '/api/files':
             self._json(list_files())
+        elif u.path == '/api/ref':
+            voice = parse_qs(u.query).get('voice', [''])[0]
+            ref = os.path.realpath(os.path.join(ARGS.samples_dir, voice, 'ref.wav'))
+            if (not voice or not ref.startswith(os.path.realpath(ARGS.samples_dir))
+                    or not os.path.isfile(ref)):
+                return self._json({'error': f'нет ref.wav для голоса {voice}'}, 404)
+            self.send_response(200)
+            self.send_header('Content-Type', 'audio/wav')
+            self.send_header('Content-Length', str(os.path.getsize(ref)))
+            self.end_headers()
+            with open(ref, 'rb') as f:
+                shutil.copyfileobj(f, self.wfile)
         elif u.path == '/audio':
             rel = parse_qs(u.query).get('rel', [''])[0]
             full = os.path.realpath(os.path.join(ARGS.sounds_dir, rel))
@@ -422,6 +447,8 @@ def regenerate_file(id_, seed=None):
         payload = {'model': ARGS.tts_model, 'input': text,
                    'voice_ref': {'type': 'base64', 'data': ref_b64},
                    'reference_text': ref_text}
+        if ARGS.max_tokens is not None:
+            payload['options'] = {'max_tokens': ARGS.max_tokens}  # server dies on long text otherwise
         if seed is not None:
             payload['seed'] = seed  # same field as audiocpp_batch.py
         body = json.dumps(payload).encode('utf-8')
@@ -469,6 +496,8 @@ def main():
     ap.add_argument('--tts-model', default='higgs-bf16')
     ap.add_argument('--tts-timeout', type=int, default=600,
                     help='regeneration request timeout, seconds')
+    ap.add_argument('--max-tokens', type=int, default=None,
+                    help='raise server max_tokens for long text chunks')
     ap.add_argument('--port', type=int, default=8765)
     ap.add_argument('--timeout', type=int, default=120, help='STT request timeout, seconds')
     ap.add_argument('--api-key', default=None, help='Bearer token for the audio server')

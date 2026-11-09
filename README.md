@@ -41,6 +41,62 @@ Your world database is not modified: the display tables live in the separate `wo
 
 ## Voice Setup
 The generation scripts assume you have voices created in Elevenlabs named in the format `race-gender`. For the exact races the script checks your elevenlabs account for, refer to `tts_cli\consts.py`. Gender will always either be `male` or `female`. ex: `orc-male`. You will need to create your own voice clones. A good place to get samples is @ https://www.wowhead.com/sounds/npc-greetings/name:orc 
+## Local Generation Pipeline (audio.cpp / Higgs)
+
+Alternative to ElevenLabs: batch generation with a local audio.cpp server
+(Higgs TTS with voice cloning, plus parakeet STT for reference transcripts).
+All URLs are local infrastructure — pass them explicitly, no defaults.
+
+Voice naming follows `race-gender` (see `RACE_DICT` in `tts_cli/consts.py`,
+e.g. `orc-male`, `scourge-male`). Sources live in `voices/<voice>/*.ogg`,
+working artifacts in `samples/<voice>/`.
+
+### 1. Prepare a voice reference
+1. Concat the sample oggs into one wav (24 kHz mono) at
+   `samples/<voice>/ref.wav` (ffmpeg concat demuxer with a list file).
+2. Transcribe it (parakeet via the server's `/v1/audio/transcriptions`,
+   WAV only) into `samples/<voice>/ref.txt` — the reference text must match
+   the audio.
+
+### 2. Export the manifest
+```bash
+python scripts/export_voice_manifest.py --voice <voice> --out samples\<voice>\manifest.jsonl
+```
+Builds the JSONL from the database, filters by voice, drops progress rows,
+keeps Cyrillic-only text for ruRU, dedups by text. Output files are named
+`f-<quest>-accept.mp3` / `m-<quest>-accept.mp3` / `<quest>-complete.mp3`
+under `quests/` and `<hash>.mp3` under `gossip/`.
+
+### 3. Batch generation
+```bash
+python scripts\audiocpp_batch.py --manifest samples\<voice>\manifest.jsonl --out AI_VoiceOverData_Vanilla\generated\sounds --ref samples\<voice>\ref.wav --ref-text-file samples\<voice>\ref.txt --url <server> --model higgs-bf16 --max-tokens 8192
+```
+- `--url` is required; pass the base URL **without** `/v1`.
+- Progress is tracked in `<manifest>.audiocpp.state.jsonl`; rerunning the
+  same command resumes where it stopped.
+- `--max-tokens 8192` avoids HTTP 500 on long text chunks; a file that still
+  loops without finishing can be regenerated with `--files <name.mp3> --seed 7`.
+- `--files` matches bare file names and forces regeneration (deletes the mp3
+  and its state entry).
+
+### 4. QA and review
+```bash
+python scripts\qa_server.py --url <server> --port 8765
+python scripts\stt_batch.py --url <server>
+```
+`qa_server.py` serves a review UI on http://127.0.0.1:8765 (filter by
+voice/NPC, verdict buttons, per-row speech recognition, regeneration from
+the manifest text, reference sample playback). `stt_batch.py` batch-runs
+speech recognition over all generated mp3 and writes a `<name>.json`
+sidecar (`{voice, npc, text, recognized, verdict}`) next to each file;
+the QA server merges those sidecars.
+
+### Database restore from `backup/`
+`docker compose up -d` (MySQL 8.4, container `mysql-server`), create the
+databases (utf8mb4), then import each dump with
+`docker exec -i mysql-server mysql -uroot -p... <db> < dump.sql`.
+The server runs on Linux: table names are lowercase and case-sensitive.
+
 ## Usage
 To use the interactive CLI tool, run the following command:
 
